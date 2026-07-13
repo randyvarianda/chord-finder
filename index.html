@@ -33,6 +33,31 @@
   #drop .small{font-size:13px; color:var(--muted)}
   input[type=file]{display:none}
 
+  .or{display:flex; align-items:center; gap:14px; margin:18px 0; color:var(--muted); font-size:12px}
+  .or::before,.or::after{content:''; flex:1; height:1px; background:var(--line)}
+  #liveBtn{
+    width:100%; background:var(--panel); border:1.5px solid var(--line); color:var(--text);
+    border-radius:12px; padding:16px; font-size:15px; font-weight:600; cursor:pointer;
+    transition:border-color .2s, background .2s;
+  }
+  #liveBtn:hover{border-color:var(--accent); background:var(--panel2)}
+  .livehint{font-size:12px; color:var(--muted); margin-top:10px; line-height:1.5}
+  .livehint b{color:var(--text)}
+
+  #live{display:none}
+  .rec{color:#F0506E; animation:blink 1.2s infinite}
+  @keyframes blink{50%{opacity:.25}}
+  #liveHist{
+    display:flex; gap:0; height:56px; border:1px solid var(--line); border-radius:10px;
+    overflow-x:auto; overflow-y:hidden; scrollbar-width:thin;
+  }
+  #liveHist .seg{flex-shrink:0}
+  #liveStop{
+    margin-top:24px; background:none; border:1px solid #F0506E; color:#F0506E;
+    padding:10px 20px; border-radius:8px; cursor:pointer; font-size:13px;
+  }
+  #liveStop:hover{background:rgba(240,80,110,.1)}
+
   /* Progress */
   #progress{display:none; margin-top:28px}
   .bar{height:6px; background:var(--panel2); border-radius:3px; overflow:hidden}
@@ -134,7 +159,23 @@
     <div class="big">Drop an audio file here</div>
     <div class="small">or click to browse &middot; mp3, wav, m4a, ogg &middot; nothing is uploaded, analysis runs in your browser</div>
   </div>
+  <div class="or"><span>or</span></div>
+  <button id="liveBtn">&#127908; Live mode — detect chords from another tab (YouTube, Spotify&hellip;)</button>
+  <p class="livehint">Pick the tab that's playing music and enable <b>"Also share tab audio"</b> in the picker. No download needed — detection runs in real time.</p>
   <input type="file" id="file" accept="audio/*">
+
+  <div id="live">
+    <div class="now" id="livePanel">
+      <div class="chord" id="liveChord">&mdash;</div>
+      <div class="meta">
+        <div class="t"><span class="rec">&#9679;</span> LIVE &middot; <span id="liveT">0:00</span></div>
+        <div class="next" id="liveStatus">listening&hellip;</div>
+      </div>
+    </div>
+    <div class="tl-label" style="margin-top:20px">Chord history</div>
+    <div id="liveHist"></div>
+    <button id="liveStop">Stop live mode</button>
+  </div>
 
   <div id="progress">
     <div class="bar"><i id="barFill"></i></div>
@@ -475,6 +516,128 @@ $('again').onclick = () => {
   $('barFill').style.width = '0%';
   $('file').value = '';
 };
+
+// ================= LIVE MODE (tab audio capture) =================
+let liveCtx = null, liveStream = null, liveTimer = null, liveStart = 0;
+let liveCur = null, liveCurStart = 0, liveVotes = [];
+
+const LWIN = 8192;                       // ~170ms @ 48kHz
+const lHann = new Float32Array(LWIN);
+for (let i = 0; i < LWIN; i++) lHann[i] = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / (LWIN - 1));
+
+function matchChroma(c){
+  let norm = 0; for (let p = 0; p < 12; p++) norm += c[p]*c[p];
+  norm = Math.sqrt(norm) + 1e-9;
+  let bi = 0, bs = -1;
+  for (let t = 0; t < 24; t++){
+    let s = 0; for (let p = 0; p < 12; p++) s += TEMPLATES[t][p] * c[p];
+    s /= norm;
+    if (s > bs){ bs = s; bi = t; }
+  }
+  return bi;
+}
+
+$('liveBtn').onclick = async () => {
+  let stream;
+  try{
+    stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+  } catch(e){ return; }                  // user cancelled the picker
+
+  if (!stream.getAudioTracks().length){
+    stream.getTracks().forEach(t => t.stop());
+    $('liveStatus') && alertNoAudio();
+    return;
+  }
+  stream.getVideoTracks().forEach(t => t.stop());   // audio only
+  liveStream = stream;
+  stream.getAudioTracks()[0].onended = stopLive;    // user clicked "Stop sharing"
+
+  liveCtx = new (window.AudioContext || window.webkitAudioContext)();
+  const src = liveCtx.createMediaStreamSource(stream);
+  const analyser = liveCtx.createAnalyser();
+  analyser.fftSize = LWIN * 2;
+  src.connect(analyser);                 // NOT connected to destination — no double audio
+  const buf = new Float32Array(analyser.fftSize);
+  const frame = new Float32Array(LWIN);
+  const freqs = [];
+  for (let midi = 36; midi <= 83; midi++)
+    freqs.push({ pc: midi % 12, f: 440 * Math.pow(2, (midi - 69) / 12) });
+
+  $('drop').style.display = 'none';
+  $('liveBtn').style.display = 'none';
+  document.querySelector('.or').style.display = 'none';
+  document.querySelector('.livehint').style.display = 'none';
+  $('result').style.display = 'none';
+  $('live').style.display = 'block';
+  $('liveHist').innerHTML = '';
+  liveStart = performance.now();
+  liveCur = null; liveVotes = [];
+
+  liveTimer = setInterval(() => {
+    analyser.getFloatTimeDomainData(buf);
+    const sr = liveCtx.sampleRate;
+
+    let e = 0;
+    const off = buf.length - LWIN;
+    for (let i = 0; i < LWIN; i++){ frame[i] = buf[off + i] * lHann[i]; e += frame[i]*frame[i]; }
+    e /= LWIN;
+
+    let label;
+    if (e < 1e-6) label = 'N.C.';
+    else {
+      const c = new Float32Array(12);
+      for (const {pc, f} of freqs) c[pc] += goertzel(frame, 0, LWIN, f, sr);
+      for (let p = 0; p < 12; p++) c[p] = Math.log10(1 + 1000 * c[p]);
+      label = LABELS[matchChroma(c)];
+    }
+
+    // hysteresis: switch only after 3 consistent votes (~0.55s)
+    liveVotes.push(label);
+    if (liveVotes.length > 3) liveVotes.shift();
+    const stable = liveVotes.length === 3 && liveVotes.every(v => v === liveVotes[0]);
+    const t = (performance.now() - liveStart) / 1000;
+
+    if (stable && label !== liveCur){
+      if (liveCur && liveCur !== 'N.C.') pushHist(liveCur, t - liveCurStart);
+      liveCur = label; liveCurStart = t;
+      const col = chordColor(label);
+      $('liveChord').textContent = label === 'N.C.' ? '\u2014' : label;
+      document.documentElement.style.setProperty('--accent', label === 'N.C.' ? 'hsl(220,10%,45%)' : col);
+      $('livePanel').style.boxShadow = `0 0 90px -30px ${col}`;
+      $('liveStatus').textContent = label === 'N.C.' ? 'listening\u2026' : 'detecting';
+    }
+    $('liveT').textContent = fmt(t);
+  }, 180);
+};
+
+function pushHist(label, dur){
+  const d = document.createElement('div');
+  d.className = 'seg';
+  d.style.width = Math.max(34, Math.round(dur * 14)) + 'px';
+  d.style.background = chordColor(label);
+  d.textContent = label;
+  d.title = `${label} \u00b7 ${dur.toFixed(1)}s`;
+  $('liveHist').appendChild(d);
+  $('liveHist').scrollLeft = $('liveHist').scrollWidth;
+}
+
+function alertNoAudio(){
+  $('drop').style.display = 'block';
+  const hint = document.querySelector('.livehint');
+  hint.innerHTML = '<b style="color:#F0506E">No audio was shared.</b> Try again and tick <b>"Also share tab audio"</b> at the bottom of the tab picker.';
+}
+
+function stopLive(){
+  clearInterval(liveTimer); liveTimer = null;
+  if (liveStream){ liveStream.getTracks().forEach(t => t.stop()); liveStream = null; }
+  if (liveCtx){ liveCtx.close(); liveCtx = null; }
+  $('live').style.display = 'none';
+  $('drop').style.display = 'block';
+  $('liveBtn').style.display = 'block';
+  document.querySelector('.or').style.display = 'flex';
+  document.querySelector('.livehint').style.display = 'block';
+}
+$('liveStop').onclick = stopLive;
 </script>
 </body>
 </html>
