@@ -61,6 +61,17 @@
     display:flex; align-items:center; justify-content:center; transition:background .3s, transform .1s;
   }
   button#play:active{transform:scale(.94)}
+
+  .vol{display:flex; align-items:center; gap:8px; flex-shrink:0}
+  .vol button{background:none; border:none; cursor:pointer; font-size:16px; color:var(--muted);
+    padding:4px; line-height:1}
+  .vol button:hover{color:var(--text)}
+  .vol input[type=range]{
+    width:90px; accent-color:var(--accent); cursor:pointer; height:4px;
+  }
+  .vol .pct{font-family:ui-monospace,Menlo,monospace; font-size:11px; color:var(--muted);
+    width:34px; text-align:right}
+
   .seek{flex:1; position:relative; height:40px; cursor:pointer}
 
   /* Timeline */
@@ -103,6 +114,8 @@
     .now{flex-direction:column; align-items:flex-start; padding:28px 24px}
     .now .chord{font-size:64px; min-width:0}
     .now .meta{text-align:left}
+    .controls{flex-wrap:wrap}
+    .seek{flex-basis:100%; order:3}
   }
 </style>
 </head>
@@ -135,6 +148,11 @@
 
     <div class="controls">
       <button id="play" aria-label="Play / pause">&#9654;</button>
+      <div class="vol">
+        <button id="mute" aria-label="Mute / unmute">&#128266;</button>
+        <input type="range" id="volume" min="0" max="100" value="100" aria-label="Volume">
+        <span class="pct" id="volPct">100%</span>
+      </div>
       <div class="seek">
         <div class="tl-label" style="margin-bottom:6px">Timeline — click to seek</div>
         <div id="timeline"><div id="playhead"></div></div>
@@ -326,6 +344,7 @@ async function handleFile(file){
     const buf = await file.arrayBuffer();
     if (audio){ audio.pause(); URL.revokeObjectURL(audio.src); }
     audio = new Audio(URL.createObjectURL(file));
+    audio.volume = vol;
 
     const res = await analyze(buf, p => {
       $('barFill').style.width = (p*100).toFixed(1) + '%';
@@ -379,6 +398,21 @@ function togglePlay(){
   else { audio.pause(); $('play').innerHTML = '&#9654;'; cancelAnimationFrame(raf); }
 }
 $('play').onclick = togglePlay;
+
+// ---------- volume ----------
+let vol = 1, lastVol = 1;
+function applyVolume(v){
+  vol = Math.min(1, Math.max(0, v));
+  if (audio) audio.volume = vol;
+  $('volume').value = Math.round(vol * 100);
+  $('volPct').textContent = Math.round(vol * 100) + '%';
+  $('mute').innerHTML = vol === 0 ? '&#128263;' : vol < 0.5 ? '&#128265;' : '&#128266;';
+}
+$('volume').oninput = e => { applyVolume(e.target.value / 100); if (vol > 0) lastVol = vol; };
+$('mute').onclick = () => {
+  if (vol > 0){ lastVol = vol; applyVolume(0); }
+  else applyVolume(lastVol || 1);
+};
 
 $('timeline').onclick = e => {
   const r = $('timeline').getBoundingClientRect();

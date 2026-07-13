@@ -2,7 +2,9 @@
 
 Detect chords from any song, right in your browser. Drop in an audio file and get a color-coded chord timeline synced to playback — no server, no upload, everything runs client-side.
 
-**Live demo:** https://randyvarianda.github.io/chord-finder/
+### 👉 [**Open the app → randyvarianda.github.io/chord-finder**](https://randyvarianda.github.io/chord-finder/)
+
+> This page is just the source code. The actual app runs at the link above.
 
 ![Chord Finder](https://img.shields.io/badge/audio-client--side-blue) ![No dependencies](https://img.shields.io/badge/dependencies-none-green)
 
