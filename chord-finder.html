@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Chord Finder</title>
+<style>
+  :root{
+    --bg:#0D0F14; --panel:#151823; --panel2:#1B1F2E;
+    --text:#E8EAF0; --muted:#6E7487; --line:#262B3D;
+    --accent:hsl(210,80%,60%);
+  }
+  *{box-sizing:border-box; margin:0; padding:0}
+  body{
+    background:var(--bg); color:var(--text); min-height:100vh;
+    font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    display:flex; flex-direction:column; align-items:center; padding:40px 20px 80px;
+  }
+  .wrap{width:100%; max-width:860px}
+  header{margin-bottom:36px}
+  .eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:11px;
+    letter-spacing:.22em; text-transform:uppercase; color:var(--muted); margin-bottom:10px}
+  h1{font-size:32px; font-weight:800; letter-spacing:-.02em}
+  h1 span{color:var(--accent); transition:color .4s}
+
+  /* Drop zone */
+  #drop{
+    border:1.5px dashed var(--line); border-radius:16px; background:var(--panel);
+    padding:64px 24px; text-align:center; cursor:pointer; transition:border-color .2s, background .2s;
+  }
+  #drop:hover, #drop.over{border-color:var(--accent); background:var(--panel2)}
+  #drop .big{font-size:17px; font-weight:600; margin-bottom:6px}
+  #drop .small{font-size:13px; color:var(--muted)}
+  input[type=file]{display:none}
+
+  /* Progress */
+  #progress{display:none; margin-top:28px}
+  .bar{height:6px; background:var(--panel2); border-radius:3px; overflow:hidden}
+  .bar i{display:block; height:100%; width:0%; background:var(--accent); transition:width .15s}
+  #progress p{font-size:12px; color:var(--muted); margin-top:8px;
+    font-family:ui-monospace,Menlo,monospace}
+
+  /* Result */
+  #result{display:none; margin-top:8px}
+  .now{
+    background:var(--panel); border:1px solid var(--line); border-radius:16px;
+    padding:36px 32px; display:flex; align-items:center; justify-content:space-between; gap:24px;
+    box-shadow:0 0 80px -30px var(--accent); transition:box-shadow .5s;
+  }
+  .now .chord{font-size:88px; font-weight:800; letter-spacing:-.03em; line-height:1;
+    color:var(--accent); transition:color .3s; min-width:200px}
+  .now .meta{text-align:right}
+  .now .meta .t{font-family:ui-monospace,Menlo,monospace; font-size:14px; color:var(--muted)}
+  .now .meta .next{font-size:13px; color:var(--muted); margin-top:6px}
+  .now .meta .next b{color:var(--text); font-weight:600}
+
+  .controls{display:flex; align-items:center; gap:16px; margin:20px 0 28px}
+  button#play{
+    width:52px; height:52px; border-radius:50%; border:none; cursor:pointer;
+    background:var(--accent); color:#0D0F14; font-size:18px; flex-shrink:0;
+    display:flex; align-items:center; justify-content:center; transition:background .3s, transform .1s;
+  }
+  button#play:active{transform:scale(.94)}
+  .seek{flex:1; position:relative; height:40px; cursor:pointer}
+
+  /* Timeline */
+  .tl-label{font-family:ui-monospace,Menlo,monospace; font-size:11px; letter-spacing:.18em;
+    text-transform:uppercase; color:var(--muted); margin-bottom:10px}
+  #timeline{
+    display:flex; width:100%; height:64px; border-radius:10px; overflow:hidden;
+    border:1px solid var(--line); position:relative;
+  }
+  .seg{
+    height:100%; display:flex; align-items:center; justify-content:center;
+    font-size:12px; font-weight:700; cursor:pointer; min-width:0; overflow:hidden;
+    white-space:nowrap; transition:filter .15s; color:#0D0F14;
+  }
+  .seg:hover{filter:brightness(1.25)}
+  #playhead{
+    position:absolute; top:0; bottom:0; width:2px; background:#fff; left:0;
+    pointer-events:none; box-shadow:0 0 8px rgba(255,255,255,.8);
+  }
+
+  /* Chord list */
+  #list{margin-top:28px; display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:8px}
+  .row{
+    background:var(--panel); border:1px solid var(--line); border-radius:10px;
+    padding:10px 14px; display:flex; align-items:center; gap:10px; cursor:pointer;
+    font-family:ui-monospace,Menlo,monospace; font-size:12px; transition:background .15s;
+  }
+  .row:hover{background:var(--panel2)}
+  .row .dot{width:10px; height:10px; border-radius:3px; flex-shrink:0}
+  .row .c{font-weight:700; font-size:14px; font-family:ui-sans-serif,system-ui,sans-serif}
+  .row .t{color:var(--muted); margin-left:auto}
+  .row.active{border-color:var(--accent)}
+
+  #again{margin-top:32px; background:none; border:1px solid var(--line); color:var(--muted);
+    padding:10px 20px; border-radius:8px; cursor:pointer; font-size:13px}
+  #again:hover{color:var(--text); border-color:var(--muted)}
+  .disclaim{font-size:12px; color:var(--muted); margin-top:14px; line-height:1.5}
+
+  @media (max-width:600px){
+    .now{flex-direction:column; align-items:flex-start; padding:28px 24px}
+    .now .chord{font-size:64px; min-width:0}
+    .now .meta{text-align:left}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="eyebrow">Chromagram &middot; Template Match &middot; Client-side</div>
+    <h1>Chord <span id="titleAccent">Finder</span></h1>
+  </header>
+
+  <div id="drop">
+    <div class="big">Drop an audio file here</div>
+    <div class="small">or click to browse &middot; mp3, wav, m4a, ogg &middot; nothing is uploaded, analysis runs in your browser</div>
+  </div>
+  <input type="file" id="file" accept="audio/*">
+
+  <div id="progress">
+    <div class="bar"><i id="barFill"></i></div>
+    <p id="progText">decoding audio…</p>
+  </div>
+
+  <div id="result">
+    <div class="now" id="nowPanel">
+      <div class="chord" id="nowChord">—</div>
+      <div class="meta">
+        <div class="t"><span id="curT">0:00</span> / <span id="totT">0:00</span></div>
+        <div class="next" id="nextUp"></div>
+      </div>
+    </div>
+
+    <div class="controls">
+      <button id="play" aria-label="Play / pause">&#9654;</button>
+      <div class="seek">
+        <div class="tl-label" style="margin-bottom:6px">Timeline — click to seek</div>
+        <div id="timeline"><div id="playhead"></div></div>
+      </div>
+    </div>
+
+    <div class="tl-label">Detected segments</div>
+    <div id="list"></div>
+
+    <button id="again">Analyze another file</button>
+    <p class="disclaim">Prototype: detects major &amp; minor triads via chromagram template matching.
+    Expect misses on dense mixes, 7th/extended chords, and heavy vocals. Colors follow the circle of fifths —
+    harmonically related chords share similar hues.</p>
+  </div>
+</div>
+
+<script>
+'use strict';
+const NOTES = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+const $ = id => document.getElementById(id);
+
+// ---------- color: circle-of-fifths hue per root ----------
+function chordColor(label){
+  if (label === 'N.C.') return 'hsl(220,10%,45%)';
+  const root = NOTES.indexOf(label.replace('m',''));
+  const hue = ((root * 7) % 12) / 12 * 360;           // fifths → neighboring hues
+  const minor = label.endsWith('m');
+  return `hsl(${hue}, ${minor ? 45 : 72}%, ${minor ? 55 : 62}%)`;
+}
+
+// ---------- templates: 12 major + 12 minor ----------
+const TEMPLATES = [], LABELS = [];
+for (let r = 0; r < 12; r++){
+  const maj = new Float32Array(12), mnr = new Float32Array(12);
+  maj[r] = 1; maj[(r+4)%12] = 1; maj[(r+7)%12] = 1;
+  mnr[r] = 1; mnr[(r+3)%12] = 1; mnr[(r+7)%12] = 1;
+  const n = Math.sqrt(3);
+  TEMPLATES.push(maj.map(v=>v/n), mnr.map(v=>v/n));
+  LABELS.push(NOTES[r], NOTES[r]+'m');
+}
+
+// ---------- Goertzel single-frequency power ----------
+function goertzel(buf, off, len, freq, sr){
+  const c = 2 * Math.cos(2 * Math.PI * freq / sr);
+  let s1 = 0, s2 = 0;
+  for (let i = 0; i < len; i++){
+    const s0 = buf[off + i] + c * s1 - s2;
+    s2 = s1; s1 = s0;
+  }
+  return s1*s1 + s2*s2 - c*s1*s2;
+}
+
+// ---------- analysis pipeline ----------
+async function analyze(arrayBuffer, onProgress){
+  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  const decoded = await ctx.decodeAudioData(arrayBuffer);
+  ctx.close();
+
+  // mono mixdown
+  const chs = [];
+  for (let c = 0; c < decoded.numberOfChannels; c++) chs.push(decoded.getChannelData(c));
+  const N = decoded.length;
+  let mono = new Float32Array(N);
+  for (let i = 0; i < N; i++){
+    let s = 0; for (const ch of chs) s += ch[i];
+    mono[i] = s / chs.length;
+  }
+
+  // decimate to ~11 kHz (enough for chroma up to B5) with box filter
+  const factor = Math.max(1, Math.round(decoded.sampleRate / 11025));
+  const sr = decoded.sampleRate / factor;
+  const M = Math.floor(N / factor);
+  const sig = new Float32Array(M);
+  for (let i = 0; i < M; i++){
+    let s = 0; const base = i * factor;
+    for (let k = 0; k < factor; k++) s += mono[base + k];
+    sig[i] = s / factor;
+  }
+  mono = null;
+
+  // note frequencies C2..B5 (48 notes → 12 pitch classes × 4 octaves)
+  const freqs = [];
+  for (let midi = 36; midi <= 83; midi++)
+    freqs.push({ pc: midi % 12, f: 440 * Math.pow(2, (midi - 69) / 12) });
+
+  const WIN = 4096, HOP = 2048;
+  const hann = new Float32Array(WIN);
+  for (let i = 0; i < WIN; i++) hann[i] = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / (WIN - 1));
+
+  const nFrames = Math.max(1, Math.floor((M - WIN) / HOP));
+  const chroma = [];       // per frame: Float32Array(12)
+  const energy = [];
+  const frame = new Float32Array(WIN);
+
+  for (let fIdx = 0; fIdx < nFrames; fIdx++){
+    const off = fIdx * HOP;
+    let e = 0;
+    for (let i = 0; i < WIN; i++){ frame[i] = sig[off + i] * hann[i]; e += frame[i]*frame[i]; }
+    energy.push(e / WIN);
+
+    const c = new Float32Array(12);
+    for (const {pc, f} of freqs) c[pc] += goertzel(frame, 0, WIN, f, sr);
+    for (let p = 0; p < 12; p++) c[p] = Math.log10(1 + 1000 * c[p]);
+    chroma.push(c);
+
+    if (fIdx % 40 === 0){
+      onProgress(fIdx / nFrames);
+      await new Promise(r => setTimeout(r));
+    }
+  }
+
+  // temporal median smoothing (window 9) per pitch class
+  const SM = 4;
+  const smooth = chroma.map((_, i) => {
+    const out = new Float32Array(12);
+    for (let p = 0; p < 12; p++){
+      const vals = [];
+      for (let k = Math.max(0, i-SM); k <= Math.min(chroma.length-1, i+SM); k++)
+        vals.push(chroma[k][p]);
+      vals.sort((a,b)=>a-b);
+      out[p] = vals[Math.floor(vals.length/2)];
+    }
+    return out;
+  });
+
+  // silence threshold
+  const eSorted = [...energy].sort((a,b)=>a-b);
+  const eThresh = eSorted[Math.floor(eSorted.length * 0.9)] * 0.01;
+
+  // match
+  const best = smooth.map((c, i) => {
+    if (energy[i] < eThresh) return -1;                 // N.C.
+    let norm = 0; for (let p = 0; p < 12; p++) norm += c[p]*c[p];
+    norm = Math.sqrt(norm) + 1e-9;
+    let bi = 0, bs = -1;
+    for (let t = 0; t < 24; t++){
+      let s = 0; for (let p = 0; p < 12; p++) s += TEMPLATES[t][p] * c[p];
+      s /= norm;
+      if (s > bs){ bs = s; bi = t; }
+    }
+    return bi;
+  });
+
+  // collapse into segments
+  const frameDur = HOP / sr;
+  const raw = [];
+  let start = 0, cur = best[0];
+  for (let i = 1; i < best.length; i++){
+    if (best[i] !== cur){ raw.push([start*frameDur, i*frameDur, cur]); start = i; cur = best[i]; }
+  }
+  raw.push([start*frameDur, best.length*frameDur, cur]);
+
+  // drop short blips, merge neighbors
+  const MIN = 0.6;
+  const segs = [];
+  for (const [s, e, idx] of raw){
+    if (e - s < MIN) continue;
+    const label = idx === -1 ? 'N.C.' : LABELS[idx];
+    if (segs.length && segs[segs.length-1].label === label) segs[segs.length-1].end = e;
+    else segs.push({ start: s, end: e, label });
+  }
+  // stretch to cover gaps left by dropped blips
+  for (let i = 0; i < segs.length - 1; i++) segs[i].end = segs[i+1].start;
+  if (segs.length) { segs[0].start = 0; segs[segs.length-1].end = decoded.duration; }
+
+  return { segs, duration: decoded.duration };
+}
+
+// ---------- UI ----------
+let audio = null, segs = [], duration = 0, raf = null;
+
+const fmt = t => `${Math.floor(t/60)}:${String(Math.floor(t%60)).padStart(2,'0')}`;
+
+$('drop').onclick = () => $('file').click();
+$('drop').ondragover = e => { e.preventDefault(); $('drop').classList.add('over'); };
+$('drop').ondragleave = () => $('drop').classList.remove('over');
+$('drop').ondrop = e => {
+  e.preventDefault(); $('drop').classList.remove('over');
+  if (e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]);
+};
+$('file').onchange = e => e.target.files[0] && handleFile(e.target.files[0]);
+
+async function handleFile(file){
+  $('drop').style.display = 'none';
+  $('progress').style.display = 'block';
+  $('progText').textContent = 'decoding audio…';
+
+  try{
+    const buf = await file.arrayBuffer();
+    if (audio){ audio.pause(); URL.revokeObjectURL(audio.src); }
+    audio = new Audio(URL.createObjectURL(file));
+
+    const res = await analyze(buf, p => {
+      $('barFill').style.width = (p*100).toFixed(1) + '%';
+      $('progText').textContent = `analyzing… ${(p*100).toFixed(0)}%`;
+    });
+    segs = res.segs; duration = res.duration;
+    $('barFill').style.width = '100%';
+    render();
+  } catch(err){
+    $('progText').textContent = 'Could not decode this file — try mp3 or wav. (' + err.message + ')';
+    setTimeout(() => { $('progress').style.display='none'; $('drop').style.display='block'; }, 3500);
+  }
+}
+
+function render(){
+  $('progress').style.display = 'none';
+  $('result').style.display = 'block';
+  $('totT').textContent = fmt(duration);
+
+  const tl = $('timeline');
+  tl.querySelectorAll('.seg').forEach(n => n.remove());
+  const list = $('list'); list.innerHTML = '';
+
+  segs.forEach((s, i) => {
+    const d = document.createElement('div');
+    d.className = 'seg';
+    d.style.width = ((s.end - s.start) / duration * 100) + '%';
+    d.style.background = chordColor(s.label);
+    d.textContent = s.label;
+    d.title = `${s.label}  ${fmt(s.start)}–${fmt(s.end)}`;
+    d.onclick = () => seek(s.start);
+    tl.appendChild(d);
+
+    const r = document.createElement('div');
+    r.className = 'row'; r.dataset.i = i;
+    r.innerHTML = `<span class="dot" style="background:${chordColor(s.label)}"></span>
+      <span class="c">${s.label}</span><span class="t">${fmt(s.start)}</span>`;
+    r.onclick = () => seek(s.start);
+    list.appendChild(r);
+  });
+
+  tl.appendChild($('playhead'));
+  audio.onended = () => { $('play').innerHTML = '&#9654;'; cancelAnimationFrame(raf); };
+  tick();
+}
+
+function seek(t){ audio.currentTime = t + 0.01; if (audio.paused) togglePlay(); }
+
+function togglePlay(){
+  if (audio.paused){ audio.play(); $('play').innerHTML = '&#10074;&#10074;'; loop(); }
+  else { audio.pause(); $('play').innerHTML = '&#9654;'; cancelAnimationFrame(raf); }
+}
+$('play').onclick = togglePlay;
+
+$('timeline').onclick = e => {
+  const r = $('timeline').getBoundingClientRect();
+  seek((e.clientX - r.left) / r.width * duration);
+};
+
+function loop(){ tick(); raf = requestAnimationFrame(loop); }
+
+function tick(){
+  const t = audio ? audio.currentTime : 0;
+  $('playhead').style.left = (t / duration * 100) + '%';
+  $('curT').textContent = fmt(t);
+
+  const idx = segs.findIndex(s => t >= s.start && t < s.end);
+  if (idx === -1) return;
+  const s = segs[idx], col = chordColor(s.label);
+
+  $('nowChord').textContent = s.label;
+  document.documentElement.style.setProperty('--accent', col);
+  $('nowPanel').style.boxShadow = `0 0 90px -30px ${col}`;
+
+  const nx = segs[idx+1];
+  $('nextUp').innerHTML = nx ? `next: <b>${nx.label}</b> at ${fmt(nx.start)}` : 'last chord';
+
+  document.querySelectorAll('.row').forEach(r =>
+    r.classList.toggle('active', +r.dataset.i === idx));
+}
+
+$('again').onclick = () => {
+  if (audio) audio.pause();
+  $('play').innerHTML = '&#9654;';
+  cancelAnimationFrame(raf);
+  $('result').style.display = 'none';
+  $('drop').style.display = 'block';
+  $('barFill').style.width = '0%';
+  $('file').value = '';
+};
+</script>
+</body>
+</html>
