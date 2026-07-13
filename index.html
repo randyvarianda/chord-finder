@@ -52,9 +52,14 @@
     overflow-x:auto; overflow-y:hidden; scrollbar-width:thin;
   }
   #liveHist .seg{flex-shrink:0}
+  .live-actions{display:flex; gap:12px; margin-top:24px}
+  #liveFinish{
+    background:var(--accent); border:none; color:#0D0F14; font-weight:700;
+    padding:12px 22px; border-radius:8px; cursor:pointer; font-size:14px; transition:background .3s;
+  }
   #liveStop{
-    margin-top:24px; background:none; border:1px solid #F0506E; color:#F0506E;
-    padding:10px 20px; border-radius:8px; cursor:pointer; font-size:13px;
+    background:none; border:1px solid #F0506E; color:#F0506E;
+    padding:12px 20px; border-radius:8px; cursor:pointer; font-size:13px;
   }
   #liveStop:hover{background:rgba(240,80,110,.1)}
 
@@ -174,7 +179,11 @@
     </div>
     <div class="tl-label" style="margin-top:20px">Chord history</div>
     <div id="liveHist"></div>
-    <button id="liveStop">Stop live mode</button>
+    <div class="live-actions">
+      <button id="liveFinish">&#10003; Finish &amp; build full timeline</button>
+      <button id="liveStop">Discard</button>
+    </div>
+    <p class="livehint">Live view is approximate (&plusmn;0.4s lag is physics — the app can't hear the future). Hit <b>Finish</b> when the song ends and the whole recording gets re-analyzed offline into a precise, seekable timeline.</p>
   </div>
 
   <div id="progress">
@@ -520,6 +529,7 @@ $('again').onclick = () => {
 // ================= LIVE MODE (tab audio capture) =================
 let liveCtx = null, liveStream = null, liveTimer = null, liveStart = 0;
 let liveCur = null, liveCurStart = 0, liveVotes = [];
+let recorder = null, recChunks = [];
 
 const LWIN = 8192;                       // ~170ms @ 48kHz
 const lHann = new Float32Array(LWIN);
@@ -557,6 +567,12 @@ $('liveBtn').onclick = async () => {
   const analyser = liveCtx.createAnalyser();
   analyser.fftSize = LWIN * 2;
   src.connect(analyser);                 // NOT connected to destination — no double audio
+
+  // record in parallel so we can build the full precise timeline afterwards
+  recChunks = [];
+  recorder = new MediaRecorder(new MediaStream(stream.getAudioTracks()));
+  recorder.ondataavailable = e => { if (e.data.size) recChunks.push(e.data); };
+  recorder.start(1000);
   const buf = new Float32Array(analyser.fftSize);
   const frame = new Float32Array(LWIN);
   const freqs = [];
@@ -591,10 +607,10 @@ $('liveBtn').onclick = async () => {
       label = LABELS[matchChroma(c)];
     }
 
-    // hysteresis: switch only after 3 consistent votes (~0.55s)
+    // hysteresis: switch after 2 consistent votes (~0.24s)
     liveVotes.push(label);
-    if (liveVotes.length > 3) liveVotes.shift();
-    const stable = liveVotes.length === 3 && liveVotes.every(v => v === liveVotes[0]);
+    if (liveVotes.length > 2) liveVotes.shift();
+    const stable = liveVotes.length === 2 && liveVotes.every(v => v === liveVotes[0]);
     const t = (performance.now() - liveStart) / 1000;
 
     if (stable && label !== liveCur){
@@ -607,7 +623,7 @@ $('liveBtn').onclick = async () => {
       $('liveStatus').textContent = label === 'N.C.' ? 'listening\u2026' : 'detecting';
     }
     $('liveT').textContent = fmt(t);
-  }, 180);
+  }, 120);
 };
 
 function pushHist(label, dur){
@@ -629,6 +645,8 @@ function alertNoAudio(){
 
 function stopLive(){
   clearInterval(liveTimer); liveTimer = null;
+  if (recorder && recorder.state !== 'inactive') recorder.stop();
+  recorder = null;
   if (liveStream){ liveStream.getTracks().forEach(t => t.stop()); liveStream = null; }
   if (liveCtx){ liveCtx.close(); liveCtx = null; }
   $('live').style.display = 'none';
@@ -638,6 +656,41 @@ function stopLive(){
   document.querySelector('.livehint').style.display = 'block';
 }
 $('liveStop').onclick = stopLive;
+
+$('liveFinish').onclick = () => {
+  if (!recorder) return;
+  const rec = recorder;
+  rec.onstop = async () => {
+    const blob = new Blob(recChunks, { type: rec.mimeType || 'audio/webm' });
+    // tear down capture, keep UI moving to analysis
+    clearInterval(liveTimer); liveTimer = null;
+    recorder = null;
+    if (liveStream){ liveStream.getTracks().forEach(t => t.stop()); liveStream = null; }
+    if (liveCtx){ liveCtx.close(); liveCtx = null; }
+    $('live').style.display = 'none';
+    $('progress').style.display = 'block';
+    $('progText').textContent = 'decoding recording…';
+
+    try{
+      const buf = await blob.arrayBuffer();
+      if (audio){ audio.pause(); URL.revokeObjectURL(audio.src); }
+      audio = new Audio(URL.createObjectURL(blob));
+      audio.volume = vol;
+      const res = await analyze(buf, p => {
+        $('barFill').style.width = (p*100).toFixed(1) + '%';
+        $('progText').textContent = `analyzing recording… ${(p*100).toFixed(0)}%`;
+      });
+      segs = res.segs; duration = res.duration;
+      render();
+    } catch(err){
+      $('progText').textContent = 'Could not analyze the recording. (' + err.message + ')';
+      setTimeout(() => { $('progress').style.display='none'; $('drop').style.display='block';
+        $('liveBtn').style.display='block'; document.querySelector('.or').style.display='flex';
+        document.querySelector('.livehint').style.display='block'; }, 3500);
+    }
+  };
+  rec.stop();
+};
 </script>
 </body>
 </html>
