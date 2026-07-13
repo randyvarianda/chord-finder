@@ -72,21 +72,25 @@
   .vol .pct{font-family:ui-monospace,Menlo,monospace; font-size:11px; color:var(--muted);
     width:34px; text-align:right}
 
-  .seek{flex:1; position:relative; height:40px; cursor:pointer}
+  .seek{flex:1; position:relative; cursor:pointer}
 
   /* Timeline */
   .tl-label{font-family:ui-monospace,Menlo,monospace; font-size:11px; letter-spacing:.18em;
     text-transform:uppercase; color:var(--muted); margin-bottom:10px}
   #timeline{
-    display:flex; width:100%; height:64px; border-radius:10px; overflow:hidden;
+    display:flex; width:100%; height:72px; border-radius:10px; overflow:hidden;
     border:1px solid var(--line); position:relative;
   }
   .seg{
     height:100%; display:flex; align-items:center; justify-content:center;
     font-size:12px; font-weight:700; cursor:pointer; min-width:0; overflow:hidden;
-    white-space:nowrap; transition:filter .15s; color:#0D0F14;
+    white-space:nowrap; transition:filter .15s; color:rgba(10,12,18,.9);
+    box-shadow:inset -1px 0 0 rgba(0,0,0,.25);
   }
-  .seg:hover{filter:brightness(1.25)}
+  .seg.tiny{font-size:0}
+  .seg:hover{filter:brightness(1.3)}
+  .seg.playing{filter:brightness(1.15); box-shadow:inset 0 -4px 0 rgba(255,255,255,.85)}
+  .seek{min-width:0}
   #playhead{
     position:absolute; top:0; bottom:0; width:2px; background:#fff; left:0;
     pointer-events:none; box-shadow:0 0 8px rgba(255,255,255,.8);
@@ -296,17 +300,28 @@ async function analyze(arrayBuffer, onProgress){
     return bi;
   });
 
+  // majority-vote smoothing: each frame takes the most common label in a ±5 window
+  const voted = best.map((_, i) => {
+    const counts = {};
+    for (let k = Math.max(0, i-5); k <= Math.min(best.length-1, i+5); k++)
+      counts[best[k]] = (counts[best[k]] || 0) + 1;
+    let bi = best[i], bc = 0;
+    for (const [idx, c] of Object.entries(counts))
+      if (c > bc){ bc = c; bi = +idx; }
+    return bi;
+  });
+
   // collapse into segments
   const frameDur = HOP / sr;
   const raw = [];
-  let start = 0, cur = best[0];
-  for (let i = 1; i < best.length; i++){
-    if (best[i] !== cur){ raw.push([start*frameDur, i*frameDur, cur]); start = i; cur = best[i]; }
+  let start = 0, cur = voted[0];
+  for (let i = 1; i < voted.length; i++){
+    if (voted[i] !== cur){ raw.push([start*frameDur, i*frameDur, cur]); start = i; cur = voted[i]; }
   }
-  raw.push([start*frameDur, best.length*frameDur, cur]);
+  raw.push([start*frameDur, voted.length*frameDur, cur]);
 
   // drop short blips, merge neighbors
-  const MIN = 0.6;
+  const MIN = 1.0;
   const segs = [];
   for (const [s, e, idx] of raw){
     if (e - s < MIN) continue;
@@ -371,6 +386,7 @@ function render(){
   segs.forEach((s, i) => {
     const d = document.createElement('div');
     d.className = 'seg';
+    d.dataset.i = i;
     d.style.width = ((s.end - s.start) / duration * 100) + '%';
     d.style.background = chordColor(s.label);
     d.textContent = s.label;
@@ -387,9 +403,16 @@ function render(){
   });
 
   tl.appendChild($('playhead'));
+  hideTinyLabels();
   audio.onended = () => { $('play').innerHTML = '&#9654;'; cancelAnimationFrame(raf); };
   tick();
 }
+
+function hideTinyLabels(){
+  document.querySelectorAll('#timeline .seg').forEach(el =>
+    el.classList.toggle('tiny', el.clientWidth < 26));
+}
+window.addEventListener('resize', hideTinyLabels);
 
 function seek(t){ audio.currentTime = t + 0.01; if (audio.paused) togglePlay(); }
 
@@ -439,6 +462,8 @@ function tick(){
 
   document.querySelectorAll('.row').forEach(r =>
     r.classList.toggle('active', +r.dataset.i === idx));
+  document.querySelectorAll('#timeline .seg').forEach(el =>
+    el.classList.toggle('playing', +el.dataset.i === idx));
 }
 
 $('again').onclick = () => {
