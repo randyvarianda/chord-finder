@@ -121,6 +121,22 @@
   .seg:hover{filter:brightness(1.3)}
   .seg.playing{filter:brightness(1.15); box-shadow:inset 0 -4px 0 rgba(255,255,255,.85)}
   .seek{min-width:0}
+
+  .toolbar{display:flex; align-items:center; gap:10px; margin:-10px 0 28px; flex-wrap:wrap}
+  .tb-group{display:flex; align-items:center; gap:8px}
+  .tb-label{font-family:ui-monospace,Menlo,monospace; font-size:11px; letter-spacing:.14em;
+    text-transform:uppercase; color:var(--muted)}
+  #speed{
+    background:var(--panel); color:var(--text); border:1px solid var(--line);
+    border-radius:8px; padding:7px 10px; font-size:13px; cursor:pointer;
+  }
+  .tb-btn{
+    background:var(--panel); border:1px solid var(--line); color:var(--text);
+    padding:8px 14px; border-radius:8px; cursor:pointer; font-size:13px; transition:border-color .15s;
+  }
+  .tb-btn:hover{border-color:var(--muted)}
+  #loop.on{border-color:var(--accent); color:var(--accent)}
+  .tb-right{margin-left:auto}
   #playhead{
     position:absolute; top:0; bottom:0; width:2px; background:#fff; left:0;
     pointer-events:none; box-shadow:0 0 8px rgba(255,255,255,.8);
@@ -211,6 +227,21 @@
         <div class="tl-label" style="margin-bottom:6px">Timeline — click to seek</div>
         <div id="timeline"><div id="playhead"></div></div>
       </div>
+    </div>
+
+    <div class="toolbar">
+      <div class="tb-group">
+        <span class="tb-label">Speed</span>
+        <select id="speed" aria-label="Playback speed">
+          <option value="0.5">0.5&times;</option>
+          <option value="0.75">0.75&times;</option>
+          <option value="1" selected>1&times;</option>
+          <option value="1.25">1.25&times;</option>
+          <option value="1.5">1.5&times;</option>
+        </select>
+      </div>
+      <button id="loop" class="tb-btn" aria-pressed="false">&#8635; Loop chord</button>
+      <button id="replace" class="tb-btn tb-right">&#8644; Replace file</button>
     </div>
 
     <div class="tl-label">Detected segments</div>
@@ -398,18 +429,28 @@ $('drop').ondrop = e => {
   e.preventDefault(); $('drop').classList.remove('over');
   if (e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]);
 };
-$('file').onchange = e => e.target.files[0] && handleFile(e.target.files[0]);
+$('file').onchange = e => {
+  if (e.target.files[0]) handleFile(e.target.files[0]);
+  e.target.value = '';
+};
 
 async function handleFile(file){
   $('drop').style.display = 'none';
+  $('result').style.display = 'none';
+  if (audio){ audio.pause(); cancelAnimationFrame(raf); $('play').innerHTML = '&#9654;'; }
+  looping = false; loopIdx = -1;
+  $('loop').classList.remove('on');
   $('progress').style.display = 'block';
   $('progText').textContent = 'decoding audio…';
+  $('barFill').style.width = '0%';
 
   try{
     const buf = await file.arrayBuffer();
-    if (audio){ audio.pause(); URL.revokeObjectURL(audio.src); }
+    if (audio) URL.revokeObjectURL(audio.src);
     audio = new Audio(URL.createObjectURL(file));
     audio.volume = vol;
+    audio.playbackRate = rate;
+    audio.preservesPitch = true;
 
     const res = await analyze(buf, p => {
       $('barFill').style.width = (p*100).toFixed(1) + '%';
@@ -464,7 +505,11 @@ function hideTinyLabels(){
 }
 window.addEventListener('resize', hideTinyLabels);
 
-function seek(t){ audio.currentTime = t + 0.01; if (audio.paused) togglePlay(); }
+function seek(t){
+  audio.currentTime = t + 0.01;
+  if (looping) loopIdx = segs.findIndex(s => t >= s.start && t < s.end);
+  if (audio.paused) togglePlay();
+}
 
 function togglePlay(){
   if (audio.paused){ audio.play(); $('play').innerHTML = '&#10074;&#10074;'; loop(); }
@@ -487,6 +532,28 @@ $('mute').onclick = () => {
   else applyVolume(lastVol || 1);
 };
 
+// ---------- speed (pitch is preserved, good for practicing) ----------
+let rate = 1;
+$('speed').onchange = e => {
+  rate = parseFloat(e.target.value);
+  if (audio){ audio.playbackRate = rate; audio.preservesPitch = true; }
+};
+
+// ---------- loop current chord segment ----------
+let looping = false, loopIdx = -1;
+$('loop').onclick = () => {
+  looping = !looping;
+  $('loop').classList.toggle('on', looping);
+  $('loop').setAttribute('aria-pressed', looping);
+  if (looping && audio){
+    const t = audio.currentTime;
+    loopIdx = segs.findIndex(s => t >= s.start && t < s.end);
+  } else loopIdx = -1;
+};
+
+// ---------- replace current file ----------
+$('replace').onclick = () => $('file').click();
+
 $('timeline').onclick = e => {
   const r = $('timeline').getBoundingClientRect();
   seek((e.clientX - r.left) / r.width * duration);
@@ -496,6 +563,13 @@ function loop(){ tick(); raf = requestAnimationFrame(loop); }
 
 function tick(){
   const t = audio ? audio.currentTime : 0;
+
+  // chord loop: bounce back to the start of the locked segment
+  if (looping && loopIdx >= 0 && segs[loopIdx] && t >= segs[loopIdx].end){
+    audio.currentTime = segs[loopIdx].start + 0.01;
+    return;
+  }
+
   $('playhead').style.left = (t / duration * 100) + '%';
   $('curT').textContent = fmt(t);
 
@@ -676,6 +750,8 @@ $('liveFinish').onclick = () => {
       if (audio){ audio.pause(); URL.revokeObjectURL(audio.src); }
       audio = new Audio(URL.createObjectURL(blob));
       audio.volume = vol;
+      audio.playbackRate = rate;
+      audio.preservesPitch = true;
       const res = await analyze(buf, p => {
         $('barFill').style.width = (p*100).toFixed(1) + '%';
         $('progText').textContent = `analyzing recording… ${(p*100).toFixed(0)}%`;
